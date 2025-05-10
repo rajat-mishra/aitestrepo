@@ -1,0 +1,147 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <#\
+.SYNOPSIS\
+Reads sAMAccountNames from a text file, queries Active Directory for each user,\
+and outputs the sAMAccountName and the value of a custom attribute (mdyOwner)\
+to a CSV file without type information.\
+\
+.DESCRIPTION\
+This script prompts the user for the path to an input text file containing one\
+sAMAccountName per line and the path for the output CSV file. It then iterates\
+through each sAMAccountName, retrieves the user object from Active Directory,\
+selects the sAMAccountName and the specified custom attribute (mdyOwner), and\
+exports the results to a CSV file. Errors for users not found are reported\
+as warnings.\
+\
+.PARAMETER InputFilePath\
+The full path to the text file containing the list of sAMAccountNames (one per line).\
+\
+.PARAMETER OutputCsvPath\
+The full path where the output CSV file should be saved.\
+\
+.EXAMPLE\
+.\\GetUserOwners.ps1\
+\
+# The script will then prompt for the input and output file paths.\
+\
+.NOTES\
+Author: Gemini AI\
+Date:   2025-05-01\
+Requires: Active Directory PowerShell Module (Install RSAT if needed).\
+Ensure the account running the script has read permissions for the user objects\
+and the 'mdyOwner' attribute in Active Directory.\
+#>\
+\
+#Requires -Module ActiveDirectory\
+\
+# --- Configuration ---\
+$customAttributeName = 'mdyOwner' # Define the custom attribute name here\
+\
+# --- User Input ---\
+# Prompt for the input file path\
+$inputFile = Read-Host "Enter the full path to the input text file (containing sAMAccountNames)"\
+\
+# Prompt for the output file path\
+$outputFile = Read-Host "Enter the full path for the output CSV file (e.g., C:\\temp\\UserOwners.csv)"\
+\
+# --- Input Validation ---\
+if (-not (Test-Path $inputFile -PathType Leaf)) \{\
+    Write-Error "Input file not found: $inputFile"\
+    # Pause before exiting if running directly in console\
+    if ($Host.Name -eq "ConsoleHost") \{ Read-Host "Press Enter to exit" \}\
+    exit 1 # Stop script execution\
+\}\
+\
+# --- Check for AD Module ---\
+# Although #Requires handles loading, this provides a more user-friendly error if missing.\
+if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) \{\
+    Write-Error "Active Directory PowerShell module is not installed or available. Please install RSAT (Remote Server Administration Tools)."\
+    if ($Host.Name -eq "ConsoleHost") \{ Read-Host "Press Enter to exit" \}\
+    exit 1\
+\}\
+# Ensure the module is imported for the current session if needed (usually handled by #Requires or auto-loading)\
+# Import-Module ActiveDirectory -ErrorAction Stop\
+\
+# --- Processing ---\
+Write-Host "Reading sAMAccountNames from '$inputFile'..."\
+try \{\
+    # Read names, filter out blank lines, trim whitespace\
+    $samAccountNames = Get-Content $inputFile -ErrorAction Stop | Where-Object \{ $_ -ne '' \} | ForEach-Object \{ $_.Trim() \}\
+\}\
+catch \{\
+    Write-Error "Error reading input file '$inputFile': $($_.Exception.Message)"\
+    if ($Host.Name -eq "ConsoleHost") \{ Read-Host "Press Enter to exit" \}\
+    exit 1\
+\}\
+\
+\
+Write-Host "Querying Active Directory for $($samAccountNames.Count) users and generating report..."\
+\
+# Create an array to store the results\
+$results = [System.Collections.Generic.List[PSObject]]::new()\
+\
+# Process each sAMAccountName\
+foreach ($sam in $samAccountNames) \{\
+    Write-Verbose "Processing user: $sam" # Use -Verbose switch when running script to see this\
+    try \{\
+        # Query AD for the user, requesting the specific custom property\
+        $adUser = Get-ADUser -Identity $sam -Properties $customAttributeName -ErrorAction Stop\
+\
+        # Create a custom object with the desired properties\
+        # Access the custom attribute using its variable name\
+        $userObject = [PSCustomObject]@\{\
+            sAMAccountName = $adUser.sAMAccountName\
+            $customAttributeName = $adUser.$customAttributeName # Dynamically named property\
+        \}\
+\
+        # Add the result object to our list\
+        $results.Add($userObject)\
+\
+    \}\
+    catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] \{\
+        # Handle cases where the user account doesn't exist in AD\
+        Write-Warning "User not found in Active Directory: '$sam'"\
+        # Optionally, add a row indicating the user wasn't found:\
+        # $userObject = [PSCustomObject]@\{\
+        #     sAMAccountName = $sam\
+        #     $customAttributeName = "NOT FOUND"\
+        # \}\
+        # $results.Add($userObject)\
+    \}\
+    catch \{\
+        # Catch any other errors during Get-ADUser (e.g., permissions, network issues)\
+        Write-Warning "Error processing user '$sam': $($_.Exception.Message)"\
+        # Optionally, add a row indicating an error:\
+        # $userObject = [PSCustomObject]@\{\
+        #     sAMAccountName = $sam\
+        #     $customAttributeName = "ERROR"\
+        # \}\
+        # $results.Add($userObject)\
+    \}\
+\} # End foreach loop\
+\
+# --- Output ---\
+if ($results.Count -gt 0) \{\
+    Write-Host "Exporting $($results.Count) records to '$outputFile'..."\
+    try \{\
+        # Export the collected data to CSV\
+        # -NoTypeInformation prevents the "#TYPE" header line\
+        # -Encoding UTF8 is generally recommended for compatibility\
+        $results | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8 -ErrorAction Stop\
+        Write-Host "Successfully created CSV file: $outputFile" -ForegroundColor Green\
+    \}\
+    catch \{\
+        Write-Error "Failed to export data to CSV '$outputFile': $($_.Exception.Message)"\
+    \}\
+\} else \{\
+    Write-Warning "No data was collected or generated. Output file was not created."\
+\}\
+\
+Write-Host "Script finished."\
+if ($Host.Name -eq "ConsoleHost") \{ Read-Host "Press Enter to exit" \}}
